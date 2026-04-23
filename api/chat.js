@@ -4,43 +4,57 @@ export default async function handler(req, res) {
   }
 
   try {
-    const { userMessage, context } = req.body || {};
+    const { userMessage, context, history } = req.body || {};
 
     if (!userMessage || typeof userMessage !== "string") {
       return res.status(400).json({ error: "userMessage is required" });
     }
 
     const systemPrompt = `
-당신은 삼투와 확산 개념 학습을 돕는 튜터입니다.
-학습자에게 정답만 짧게 주기보다, 현재 보고 있는 문제와 관련된 개념을 이해할 수 있도록 설명하세요.
-가능하면 한국어로 답하세요.
-답변은 간결하지만 이해 가능하게 작성하세요.
+당신은 삼투와 확산 개념 학습을 돕는 친절한 AI 튜터입니다.
+학습자가 현재 보고 있는 문제 맥락을 바탕으로 자연스럽게 대화하세요.
+정답만 단정적으로 주기보다, 왜 그런지 짧고 이해하기 쉽게 설명하세요.
+답변은 한국어로 하세요.
+답변은 너무 길지 않게, 보통 2~5문장 이내로 하세요.
+교과서식 장문 설명보다 ChatGPT처럼 자연스럽고 대화형으로 답하세요.
+학습자가 이미 한 말을 고려해서 이어서 답하세요.
 현재 문제 맥락:
 ${JSON.stringify(context || {}, null, 2)}
 `;
 
-    const response = await fetch("https://api.openai.com/v1/responses", {
+    const messages = [
+      {
+        role: "system",
+        content: systemPrompt
+      },
+      ...(Array.isArray(history)
+        ? history
+            .filter(
+              (m) =>
+                m &&
+                (m.role === "user" || m.role === "assistant") &&
+                typeof m.content === "string" &&
+                m.content.trim()
+            )
+            .slice(-10)
+        : []),
+      {
+        role: "user",
+        content: userMessage
+      }
+    ];
+
+    const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${process.env.OPENAI_API_KEY}`
+        Authorization: `Bearer ${process.env.OPENAI_API_KEY}`
       },
       body: JSON.stringify({
         model: "gpt-4o-mini",
-        input: [
-          {
-            role: "system",
-            content: [
-              { type: "input_text", text: systemPrompt }
-            ]
-          },
-          {
-            role: "user",
-            content: [
-              { type: "input_text", text: userMessage }
-            ]
-          }
-        ]
+        messages,
+        temperature: 0.7,
+        max_tokens: 220
       })
     });
 
@@ -48,19 +62,14 @@ ${JSON.stringify(context || {}, null, 2)}
 
     if (!response.ok) {
       return res.status(response.status).json({
-        error: data?.error?.message || data?.message || "OpenAI request failed",
+        error: data?.error?.message || "OpenAI request failed",
         raw: data
       });
     }
 
     const outputText =
-      data?.output_text ||
-      data?.output?.flatMap(item => item?.content || [])
-        ?.filter(c => c?.type === "output_text")
-        ?.map(c => c?.text || "")
-        ?.join("\n")
-        ?.trim() ||
-      "응답을 불러오지 못했습니다.";
+      data?.choices?.[0]?.message?.content?.trim() ||
+      "죄송해요. 지금은 답변을 불러오지 못했어요.";
 
     return res.status(200).json({
       output_text: outputText,
